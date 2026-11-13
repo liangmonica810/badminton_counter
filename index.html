@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b2a3c">
+<title>羽球擊球計數</title>
+<style>
+  :root {
+    --bg: #e9f3fb;
+    --text: #0a2742;
+    --muted: #4b6378;
+    --card: #175e81;
+    --card-border: #0b2a3c;
+    --card-text: #ffffff;
+    --accent: #1572d3;
+    --danger: #d64545;
+    --stage: #0b1c2c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+  }
+
+  /* ── 上方工具列 ── */
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+  header h1 { font-size: 18px; margin: 0 auto 0 0; white-space: nowrap; }
+  button, .file-btn {
+    font: inherit;
+    font-size: 15px;
+    border: 0;
+    border-radius: 8px;
+    padding: 9px 14px;
+    background: #ffffff;
+    color: var(--text);
+    box-shadow: 0 0 0 1px #c7dbef inset;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  #mainBtn { background: var(--accent); color: #fff; box-shadow: none; font-weight: 700; min-width: 120px; }
+  #mainBtn.recording { background: var(--danger); }
+  .file-btn input { display: none; }
+
+  /* ── 主版面：左畫面、右三張卡片 ── */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 20px;
+    padding: 0 16px 16px;
+    min-height: 0;
+  }
+  .left { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+  .stage {
+    position: relative;
+    background: var(--stage);
+    border: 2px solid #cfe3f3;
+    border-radius: 12px;
+    overflow: hidden;
+    width: min(100%, calc((100dvh - 150px) * var(--ar, 1.7778)));
+    aspect-ratio: var(--ar, 1.7778);
+    margin: 0 auto;
+    touch-action: none;
+  }
+  .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .stage video { object-fit: fill; }
+  .placeholder {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    color: #d6e8f8; font-size: 18px; text-align: center; padding: 16px; line-height: 1.6;
+  }
+  .placeholder[hidden] { display: none; }
+  .status { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; color: var(--muted); min-height: 20px; }
+  #timeText { white-space: nowrap; }
+  .rec { color: var(--danger); font-weight: 700; }
+
+  .cards { display: flex; flex-direction: column; gap: 20px; }
+  .card {
+    flex: 1;
+    background: var(--card);
+    border: 2px solid var(--card-border);
+    border-radius: 10px;
+    color: var(--card-text);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 12px; text-align: center; min-height: 110px;
+    transition: transform .12s, background .3s;
+  }
+  .card .title { font-size: 16px; opacity: .9; }
+  .card .value { font-size: 34px; font-weight: 700; line-height: 1.25; font-variant-numeric: tabular-nums; }
+  .card .sub { font-size: 15px; opacity: .9; }
+  .card.flash { transform: scale(1.04); background: #1f86b8; }
+  .card.flash-bad { transform: scale(1.04); background: #b23b3b; }
+
+  /* 手機直立：畫面在上，三張卡片並排在下 */
+  @media (max-aspect-ratio: 1/1) {
+    main { grid-template-columns: 1fr; grid-template-rows: auto auto; align-content: start; }
+    .stage { width: 100%; }
+    .cards { flex-direction: row; gap: 10px; }
+    .card { min-height: 110px; padding: 8px 4px; }
+    .card .value { font-size: 22px; }
+    .card .title, .card .sub { font-size: 13px; }
+  }
+
+  /* ── 對話框 ── */
+  dialog {
+    border: 0; border-radius: 14px; padding: 20px; width: min(92vw, 380px);
+    color: var(--text); background: #fff;
+  }
+  dialog::backdrop { background: rgba(5, 20, 35, .55); }
+  dialog h2 { margin: 0 0 12px; font-size: 20px; }
+  dialog .big { font-size: 22px; margin: 6px 0; }
+  dialog label { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 10px 0; }
+  dialog input[type=number] { width: 90px; font: inherit; padding: 6px; border-radius: 6px; border: 1px solid #c7dbef; }
+  dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+  dialog .hint { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  a.download { display: inline-block; text-decoration: none; background: var(--accent); color: #fff; padding: 9px 14px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏸 羽球擊球計數</h1>
+  <button id="mainBtn">開啟相機</button>
+  <button id="flipBtn" title="切換前／後鏡頭">切換鏡頭</button>
+  <label class="file-btn" role="button">選擇影片<input id="fileInput" type="file" accept="video/*"></label>
+  <button id="folderBtn" title="選擇錄影自動儲存的資料夾">儲存位置</button>
+  <button id="settingsBtn">設定</button>
+</header>
+
+<main>
+  <section class="left">
+    <div class="stage" id="stage">
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="placeholder" id="placeholder">按「開啟相機」對準球網<br>或按「選擇影片」分析錄好的影片</div>
+    </div>
+    <div class="status">
+      <span id="statusText">尚未開始</span>
+      <span id="timeText"></span>
+    </div>
+  </section>
+
+  <aside class="cards">
+    <div class="card" id="hitCard">
+      <div class="value" id="hitValue">Hit 到 0 次球</div>
+      <div class="sub" id="hitSub">全片共 0 次</div>
+    </div>
+    <div class="card" id="timerCard">
+      <div class="title">倒數計時</div>
+      <div class="value" id="timerValue">03:00</div>
+    </div>
+    <div class="card" id="mistakeCard">
+      <div class="title">失誤次數</div>
+      <div class="value" id="mistakeValue">0 次</div>
+    </div>
+  </aside>
+</main>
+
+<dialog id="resultDlg">
+  <h2>測試結果</h2>
+  <div class="big" id="resHits"></div>
+  <div class="big" id="resMistakes"></div>
+  <div id="resTime"></div>
+  <p class="hint" id="resSaved"></p>
+  <div class="row">
+    <a class="download" id="downloadLink" hidden>下載錄影</a>
+    <button id="resClose">關閉</button>
+  </div>
+</dialog>
+
+<dialog id="settingsDlg">
+  <h2>設定</h2>
+  <label>測試時間（分鐘）<input id="setMinutes" type="number" min="0.5" max="60" step="0.5"></label>
+  <label>失誤判定（秒）<input id="setGap" type="number" min="1" max="15" step="0.5"></label>
+  <p class="hint">失誤判定：球過網後超過這個秒數都沒有下一次過網，就算失誤 1 次。</p>
+  <p class="hint">感應區（黃色框）：沒有在錄影時，直接在畫面上拖曳就能重新框選。請框在<b>網子正上方、沒有球員經過</b>的位置。</p>
+  <div class="row">
+    <button id="resetRegion">感應區還原預設</button>
+    <button id="settingsSave">完成</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+
+/* ═══════════════════════════════════════════════
+   1. 參數（與 Python 版 count_hits.py 相同）
+   ═══════════════════════════════════════════════ */
+const DIFF_TH = 30;            // 相鄰兩幀灰階差異大於此值的像素視為移動
+const ENERGY_TH = 0.0024;      // 移動像素佔感應區面積的比例大於此值，視為有球通過
+const MERGE_SEC = 0.1;         // 間隔小於此秒數的動態合併為同一次過網
+const MIN_INTERVAL_SEC = 0.3;  // 兩次過網最短間隔
+const DEFAULT_REGION = [0.40, 0.60, 0.23, 0.45];  // 感應區 (x0, x1, y0, y1)，畫面寬高比例
+
+const settings = { region: DEFAULT_REGION.slice(), minutes: 3, mistakeGap: 3 };
+try {
+  const saved = JSON.parse(localStorage.getItem("hitcounter-settings") || "null");
+  if (saved) Object.assign(settings, saved);
+} catch (e) { /* 無法讀取就用預設值 */ }
+function saveSettings() {
+  try { localStorage.setItem("hitcounter-settings", JSON.stringify(settings)); } catch (e) {}
+}
+
+/* ═══════════════════════════════════════════════
+   2. 虛擬感應線計數器（Python TripwireCounter 的網頁版）
+      改用「秒」而不是「幀」計算時間，手機幀率不穩也不影響
+   ═══════════════════════════════════════════════ */
+class TripwireCounter {
+  constructor(width, height, region) {
+    const [rx0, rx1, ry0, ry1] = region;
+    this.x0 = Math.trunc(rx0 * width);  this.x1 = Math.trunc(rx1 * width);
+    this.y0 = Math.trunc(ry0 * height); this.y1 = Math.trunc(ry1 * height);
+    this.w = this.x1 - this.x0;
+    this.h = this.y1 - this.y0;
+    this.minPixels = ENERGY_TH * this.w * this.h;
+    this.prev = null;
+    this.crossings = [];   // [{t, dir}]
+    this.event = [];       // 進行中的事件 [{t, energy}]
+    this.eventCx = [];     // 事件期間每一幀的 {t, cx}
+    this.lastEnergy = 0;
+  }
+
+  /** 餵入感應區的 RGBA 像素與時間（秒），回傳新確定的過網 */
+  update(rgba, t) {
+    const n = this.w * this.h;
+    const gray = new Uint8Array(n);
+    for (let i = 0, j = 0; i < n; i++, j += 4) {
+      // 與 OpenCV cvtColor(BGR2GRAY) 相同的整數公式
+      gray[i] = (rgba[j] * 4899 + rgba[j + 1] * 9617 + rgba[j + 2] * 1868 + 8192) >> 14;
+    }
+    if (!this.prev) { this.prev = gray; return []; }
+
+    let count = 0, sumX = 0;
+    for (let i = 0; i < n; i++) {
+      if (Math.abs(gray[i] - this.prev[i]) > DIFF_TH) { count++; sumX += i % this.w; }
+    }
+    this.prev = gray;
+    this.lastEnergy = count;
+    const cx = count > 15 ? sumX / count : NaN;
+
+    const found = [];
+    if (this.event.length && t - this.event[this.event.length - 1].t > MERGE_SEC + 1e-6) {
+      found.push(...this._finish());
+    }
+    if (this.event.length) this.eventCx.push({ t, cx });
+    if (count > this.minPixels) {
+      if (!this.event.length) this.eventCx = [{ t, cx }];
+      this.event.push({ t, energy: count });
+    }
+    return found;
+  }
+
+  flush() { return this.event.length ? this._finish() : []; }
+
+  _finish() {
+    const ev = this.event;
+    const lastT = ev[ev.length - 1].t;
+    const xs = this.eventCx.filter(p => p.t <= lastT && !Number.isNaN(p.cx)).map(p => p.cx);
+    const dir = xs.length < 2 ? "?" : (xs[xs.length - 1] > xs[0] ? "L>R" : "R>L");
+    let peak = ev[0];
+    for (const p of ev) if (p.energy > peak.energy) peak = p;
+    this.event = []; this.eventCx = [];
+    const last = this.crossings[this.crossings.length - 1];
+    if (last && peak.t - last.t < MIN_INTERVAL_SEC - 1e-6) return [];
+    const c = { t: peak.t, dir };
+    this.crossings.push(c);
+    return [c];
+  }
+}
+
+/** 失誤：球過網後超過 gap 秒沒有下一次過網，算一次失誤（回傳每次失誤被確認的時間） */
+function detectMistakes(hitTimes, gap, endTime) {
+  const out = [];
+  for (let i = 0; i < hitTimes.length; i++) {
+    const h = hitTimes[i], next = hitTimes[i + 1];
+    if (next !== undefined) { if (next - h > gap) out.push(h + gap); }
+    else if (endTime - h >= gap) out.push(h + gap);
+  }
+  return out;
+}
+
+/* ═══════════════════════════════════════════════
+   3. 畫面與狀態
+   ═══════════════════════════════════════════════ */
+const $ = id => document.getElementById(id);
+const video = $("video"), overlay = $("overlay"), stage = $("stage");
+const octx = overlay.getContext("2d");
+const grab = document.createElement("canvas");
+const gctx = grab.getContext("2d", { willReadFrequently: true });
+
+let mode = "idle";        // idle | preview | recording | file
+let facing = "environment";
+let stream = null, recorder = null, chunks = [], recordUrl = null;
+let counter = null, startTime = 0, elapsed = 0, frameHandle = null;
+let wakeLock = null, lastHitCount = 0, lastMistakeCount = 0;
+
+function fmt(sec) {
+  sec = Math.max(0, Math.ceil(sec - 1e-6));
+  return String(Math.floor(sec / 60)).padStart(2, "0") + ":" + String(sec % 60).padStart(2, "0");
+}
+function setStatus(text) { $("statusText").textContent = text; }
+function flash(card, cls) {
+  card.classList.add(cls);
+  setTimeout(() => card.classList.remove(cls), 250);
+}
+
+function updateCards(final = false) {
+  const limit = settings.minutes * 60;
+  $("timerValue").textContent = fmt(limit - elapsed);
+  const hits = counter ? counter.crossings.map(c => c.t) : [];
+  // 過網約 0.1 秒後才確認，進行中留 0.2 秒緩衝避免誤判失誤；結束時算到最後
+  const endT = final ? elapsed : elapsed - 0.2;
+  const mistakes = detectMistakes(hits, settings.mistakeGap, endT).filter(t => t <= elapsed);
+  $("hitValue").textContent = `Hit 到 ${hits.length} 次球`;
+  $("hitSub").textContent = mode === "recording" ? "錄影中，邊錄邊計算"
+                          : mode === "file" ? "分析中..." : `全片共 ${hits.length} 次`;
+  $("mistakeValue").textContent = `${mistakes.length} 次`;
+  if (hits.length > lastHitCount) flash($("hitCard"), "flash");
+  if (mistakes.length > lastMistakeCount) flash($("mistakeCard"), "flash-bad");
+  lastHitCount = hits.length; lastMistakeCount = mistakes.length;
+  return { hits: hits.length, mistakes: mistakes.length };
+}
+
+function resetCounts() {
+  counter = null; elapsed = 0; lastHitCount = 0; lastMistakeCount = 0;
+  updateCards();
+}
+
+/* ── 感應區框線與拖曳調整 ── */
+function sizeOverlay() {
+  const r = stage.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  overlay.width = Math.round(r.width * dpr);
+  overlay.height = Math.round(r.height * dpr);
+  drawOverlay();
+}
+let dragStart = null, dragNow = null;
+function drawOverlay() {
+  const W = overlay.width, H = overlay.height;
+  octx.clearRect(0, 0, W, H);
+  if (mode === "idle") return;
+  let [x0, x1, y0, y1] = settings.region;
+  if (dragStart && dragNow) {
+    x0 = Math.min(dragStart.x, dragNow.x); x1 = Math.max(dragStart.x, dragNow.x);
+    y0 = Math.min(dragStart.y, dragNow.y); y1 = Math.max(dragStart.y, dragNow.y);
+  }
+  const active = counter && counter.lastEnergy > counter.minPixels;
+  octx.lineWidth = 3 * (window.devicePixelRatio || 1);
+  octx.strokeStyle = active ? "#ff4d4d" : "#ffe14d";
+  octx.strokeRect(x0 * W, y0 * H, (x1 - x0) * W, (y1 - y0) * H);
+  octx.fillStyle = octx.strokeStyle;
+  octx.font = `${14 * (window.devicePixelRatio || 1)}px sans-serif`;
+  octx.fillText("感應區", x0 * W + 4, y0 * H - 6);
+}
+function stagePoint(e) {
+  const r = stage.getBoundingClientRect();
+  return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+           y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) };
+}
+stage.addEventListener("pointerdown", e => {
+  if (mode !== "preview") return;
+  dragStart = dragNow = stagePoint(e);
+  stage.setPointerCapture(e.pointerId);
+});
+stage.addEventListener("pointermove", e => { if (dragStart) { dragNow = stagePoint(e); drawOverlay(); } });
+stage.addEventListener("pointerup", () => {
+  if (!dragStart) return;
+  const x0 = Math.min(dragStart.x, dragNow.x), x1 = Math.max(dragStart.x, dragNow.x);
+  const y0 = Math.min(dragStart.y, dragNow.y), y1 = Math.max(dragStart.y, dragNow.y);
+  if (x1 - x0 > 0.03 && y1 - y0 > 0.03) {
+    settings.region = [x0, x1, y0, y1].map(v => Math.round(v * 1000) / 1000);
+    saveSettings();
+    setStatus("已更新感應區");
+  }
+  dragStart = dragNow = null;
+  drawOverlay();
+});
+window.addEventListener("resize", sizeOverlay);
+
+/* ═══════════════════════════════════════════════
+   4. 逐幀處理
+   ═══════════════════════════════════════════════ */
+function prepareCounter() {
+  const w = video.videoWidth, h = video.videoHeight;
+  counter = new TripwireCounter(w, h, settings.region);
+  grab.width = counter.w; grab.height = counter.h;
+}
+
+function processFrame(t) {
+  if (!counter || counter.w < 2 || counter.h < 2) return;
+  gctx.drawImage(video, counter.x0, counter.y0, counter.w, counter.h, 0, 0, counter.w, counter.h);
+  counter.update(gctx.getImageData(0, 0, counter.w, counter.h).data, t);
+}
+
+let lastMediaTime = -1;
+let loopToken = 0;  // 每次重新啟動迴圈就換一個號碼，舊的迴圈會自動停止
+function loop(token, now, meta) {
+  if (token !== loopToken) return;
+  if (mode === "recording" || mode === "file") {
+    let t;
+    if (mode === "recording") t = (now - startTime) / 1000;
+    else t = meta && meta.mediaTime !== undefined ? meta.mediaTime : video.currentTime;
+    const isNewFrame = mode === "recording" || t !== lastMediaTime;
+    lastMediaTime = t;
+    if (isNewFrame) {
+      elapsed = t;
+      processFrame(t);
+      updateCards();
+      $("timeText").innerHTML = mode === "recording" ? `<span class="rec">● REC ${fmt(t)}</span>` : `${fmt(t)} / ${fmt(video.duration || 0)}`;
+      if (elapsed >= settings.minutes * 60) { stopSession(); return; }
+    }
+  }
+  drawOverlay();
+  scheduleFrame(token);
+}
+function scheduleFrame(token) {
+  if (mode === "idle") return;
+  if (token === undefined) token = ++loopToken;  // 啟動新的迴圈
+  if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+    frameHandle = video.requestVideoFrameCallback((now, meta) => loop(token, now, meta));
+  } else {
+    frameHandle = requestAnimationFrame(now => loop(token, now, null));
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   5. 相機、錄影、影片檔
+   ═══════════════════════════════════════════════ */
+async function openCamera() {
+  stopStream();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("這個瀏覽器無法使用相機。\n請用 https:// 網址開啟本頁，並使用 Chrome 或 Safari。");
+    return false;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
+    });
+  } catch (err) {
+    alert("無法開啟相機：" + err.message + "\n\n請允許瀏覽器使用相機後再試一次。");
+    return false;
+  }
+  video.removeAttribute("src");
+  video.srcObject = stream;
+  await video.play().catch(() => {});
+  await waitForSize();
+  return true;
+}
+function waitForSize() {
+  return new Promise(resolve => {
+    if (video.videoWidth) return resolve();
+    video.addEventListener("loadedmetadata", () => resolve(), { once: true });
+  }).then(() => {
+    stage.style.setProperty("--ar", (video.videoWidth / video.videoHeight).toFixed(4));
+    $("placeholder").hidden = true;
+    requestAnimationFrame(sizeOverlay);
+  });
+}
+function stopStream() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+}
+
+async function startPreview() {
+  if (!(await openCamera())) return;
+  mode = "preview";
+  resetCounts();
+  setStatus("對準球網後按「開始錄影」。可在畫面上拖曳調整黃色感應區。");
+  $("timeText").textContent = "";
+  updateButtons();
+  scheduleFrame();
+}
+
+/* ── 錄影自動存到指定資料夾（Edge / Chrome 電腦版的 File System Access API）──
+   按「儲存位置」選一次資料夾，瀏覽器會記住；之後每次錄影結束自動存進去。
+   不支援的瀏覽器（手機、Safari）仍然用「下載錄影」按鈕。 */
+const canPickFolder = "showDirectoryPicker" in window;
+let saveDir = null;
+
+function idb(mode, fn) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open("badminton-counter", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("kv");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction("kv", mode);
+      const req = fn(tx.objectStore("kv"));
+      tx.oncomplete = () => resolve(req && req.result);
+      tx.onerror = () => reject(tx.error);
+    };
+  });
+}
+async function loadSaveDir() {
+  try { saveDir = (await idb("readonly", s => s.get("saveDir"))) || null; } catch (e) { saveDir = null; }
+  updateFolderBtn();
+}
+function updateFolderBtn() {
+  const b = $("folderBtn");
+  b.hidden = !canPickFolder;
+  b.textContent = saveDir ? `儲存到：${saveDir.name}` : "儲存位置";
+}
+async function pickSaveDir() {
+  try {
+    saveDir = await window.showDirectoryPicker({ id: "recordings", mode: "readwrite", startIn: "downloads" });
+    await idb("readwrite", s => s.put(saveDir, "saveDir"));
+    updateFolderBtn();
+    setStatus(`錄影會自動存到「${saveDir.name}」資料夾`);
+  } catch (e) {
+    if (e.name !== "AbortError") alert("無法使用這個資料夾：" + e.message);
+  }
+}
+/* 確認仍有寫入權限。重新整理頁面後瀏覽器會再問一次，必須在按按鈕時呼叫。 */
+async function ensureSavePermission() {
+  if (!saveDir) return false;
+  try {
+    const opts = { mode: "readwrite" };
+    if ((await saveDir.queryPermission(opts)) === "granted") return true;
+    return (await saveDir.requestPermission(opts)) === "granted";
+  } catch (e) { return false; }
+}
+async function saveToFolder(blob, name) {
+  if (!saveDir || (await saveDir.queryPermission({ mode: "readwrite" })) !== "granted") return false;
+  const file = await saveDir.getFileHandle(name, { create: true });
+  const w = await file.createWritable();
+  await w.write(blob);
+  await w.close();
+  return true;
+}
+
+function startRecording() {
+  if (saveDir) ensureSavePermission(); // 趁按下按鈕時取得寫入權限，錄完才能自動存
+  mode = "recording";
+  prepareCounter();
+  resetCountsKeepCounter();
+  startTime = performance.now();
+  chunks = [];
+  if (recordUrl) { URL.revokeObjectURL(recordUrl); recordUrl = null; }
+  if (window.MediaRecorder) {
+    const types = ["video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+    const mimeType = types.find(t => MediaRecorder.isTypeSupported(t));
+    try {
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      recorder.start(1000);
+    } catch (e) { recorder = null; }
+  }
+  requestWakeLock();
+  setStatus("錄影中…按「停止」結束，時間到會自動停止");
+  updateButtons();
+}
+function resetCountsKeepCounter() { elapsed = 0; lastHitCount = 0; lastMistakeCount = 0; updateCards(); }
+
+function stopSession() {
+  if (mode !== "recording" && mode !== "file") return;
+  const wasFile = mode === "file";
+  if (counter) counter.flush();
+  const result = updateCardsFinal();
+  if (wasFile) {
+    video.pause();
+    mode = "preview-file";
+  } else {
+    mode = "preview";
+  }
+  releaseWakeLock();
+  const show = () => showResult(result, wasFile);
+  if (recorder && recorder.state !== "inactive") {
+    recorder.onstop = () => {
+      const type = recorder.mimeType || "video/webm";
+      const blob = new Blob(chunks, { type });
+      recordUrl = URL.createObjectURL(blob);
+      const ext = type.includes("mp4") ? "mp4" : "webm";
+      const d = new Date(), p = n => String(n).padStart(2, "0");
+      const name = `live_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+      $("downloadLink").download = name;
+      $("downloadLink").href = recordUrl;
+      recorder = null;
+      $("resSaved").textContent = saveDir ? "儲存中…" : (canPickFolder ? "提示：按上方「儲存位置」選資料夾，之後錄影會自動存進去。" : "");
+      show();
+      if (saveDir) {
+        saveToFolder(blob, name).then(ok => {
+          $("resSaved").textContent = ok
+            ? `✔ 已自動存到「${saveDir.name}」資料夾：${name}`
+            : "沒有資料夾的寫入權限，請按「下載錄影」，或重新按「儲存位置」選一次資料夾。";
+        }).catch(e => { $("resSaved").textContent = "自動儲存失敗：" + e.message + "，請按「下載錄影」。"; });
+      }
+    };
+    recorder.stop();
+  } else {
+    recorder = null;
+    show();
+  }
+  if (wasFile) mode = "preview-file";
+  setStatus(wasFile ? "影片分析完成" : "錄影結束。可以再按「開始錄影」重新測試。");
+  updateButtons();
+}
+function updateCardsFinal() {
+  const r = updateCards(true);
+  $("hitSub").textContent = `全片共 ${r.hits} 次`;
+  return r;
+}
+function showResult(r, wasFile) {
+  $("resHits").textContent = `擊球（過網）：${r.hits} 次`;
+  $("resMistakes").textContent = `失誤：${r.mistakes} 次`;
+  $("resTime").textContent = `${wasFile ? "影片長度" : "錄影時間"}：${fmt(elapsed)}`;
+  $("downloadLink").hidden = wasFile || !recordUrl;
+  if (wasFile || !recordUrl) $("resSaved").textContent = "";
+  $("resultDlg").showModal();
+}
+
+async function requestWakeLock() {
+  try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+}
+function releaseWakeLock() { try { wakeLock && wakeLock.release(); } catch (e) {} wakeLock = null; }
+
+/* 選擇錄好的影片來分析（現場相機有問題時的備案） */
+$("fileInput").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (mode === "recording") stopSession();
+  stopStream();
+  video.srcObject = null;
+  video.src = URL.createObjectURL(file);
+  video.muted = true;
+  mode = "file";
+  await waitForSize();
+  resetCounts();
+  prepareCounter();
+  lastMediaTime = -1;
+  video.currentTime = 0;
+  setStatus(`分析影片：${file.name}`);
+  updateButtons();
+  video.onended = () => { elapsed = video.duration; stopSession(); };
+  await video.play().catch(err => alert("無法播放這支影片：" + err.message));
+  scheduleFrame();
+});
+
+/* ── 按鈕 ── */
+function updateButtons() {
+  const btn = $("mainBtn");
+  btn.classList.toggle("recording", mode === "recording");
+  btn.textContent = mode === "recording" ? "■ 停止" : (mode === "preview" ? "● 開始錄影" : "開啟相機");
+  btn.disabled = mode === "file";
+  $("flipBtn").disabled = mode === "recording" || mode === "file";
+  $("settingsBtn").disabled = mode === "recording" || mode === "file";
+  $("folderBtn").disabled = mode === "recording";
+}
+$("mainBtn").addEventListener("click", () => {
+  if (mode === "recording") stopSession();
+  else if (mode === "preview") startRecording();
+  else startPreview();
+});
+$("flipBtn").addEventListener("click", () => {
+  facing = facing === "environment" ? "user" : "environment";
+  if (mode === "preview") startPreview();
+});
+$("resClose").addEventListener("click", () => $("resultDlg").close());
+$("folderBtn").addEventListener("click", () => { if (mode !== "recording") pickSaveDir(); });
+$("settingsBtn").addEventListener("click", () => {
+  $("setMinutes").value = settings.minutes;
+  $("setGap").value = settings.mistakeGap;
+  $("settingsDlg").showModal();
+});
+$("settingsSave").addEventListener("click", () => {
+  const m = parseFloat($("setMinutes").value), g = parseFloat($("setGap").value);
+  if (m > 0) settings.minutes = m;
+  if (g > 0) settings.mistakeGap = g;
+  saveSettings();
+  $("settingsDlg").close();
+  updateCards();
+});
+$("resetRegion").addEventListener("click", () => {
+  settings.region = DEFAULT_REGION.slice();
+  saveSettings();
+  drawOverlay();
+  setStatus("感應區已還原預設");
+});
+
+updateButtons();
+updateCards();
+loadSaveDir();
+</script>
+</body>
+</html>
