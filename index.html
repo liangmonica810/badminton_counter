@@ -103,6 +103,10 @@
   .card .sub { font-size: 15px; opacity: .9; }
   .card.flash { transform: scale(1.04); background: #1f86b8; }
   .card.flash-bad { transform: scale(1.04); background: #b23b3b; }
+  /* 左方失誤 / 右方失誤：兩格並排 */
+  .miss-row { flex: 1; display: flex; gap: 12px; }
+  .miss-row .card { padding: 12px 4px; }
+  .miss-row .card .value { font-size: 28px; }
 
   /* 手機直立：畫面在上，三張卡片並排在下 */
   @media (max-aspect-ratio: 1/1) {
@@ -112,6 +116,12 @@
     .card { min-height: 110px; padding: 8px 4px; }
     .card .value { font-size: 22px; }
     .card .title, .card .sub { font-size: 13px; }
+    /* 直向：擊球、倒數在上一列，左方 / 右方失誤在下一列 */
+    .cards { flex-wrap: wrap; }
+    .cards > .card { flex: 1 1 0; }
+    .miss-row { flex: 1 1 100%; gap: 10px; }
+    .miss-row .card { min-height: 90px; }
+    .miss-row .card .value { font-size: 22px; }
   }
 
   /* ── 對話框 ── */
@@ -127,6 +137,63 @@
   dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
   dialog .hint { font-size: 13px; color: var(--muted); line-height: 1.5; }
   a.download { display: inline-block; text-decoration: none; background: var(--accent); color: #fff; padding: 9px 14px; border-radius: 8px; }
+  #resRotate { color: var(--accent); font-weight: 700; }
+
+  /* ── 錄影中：相機畫面全螢幕（橫幅），擊球／倒數／失誤直接疊在畫面上 ── */
+  body.recording { overflow: hidden; }
+  body.recording::before { content: ""; position: fixed; inset: 0; background: #000; z-index: 39; }
+  body.recording .stage {
+    position: fixed; inset: 0; margin: auto; z-index: 40;
+    width: min(100vw, calc(100dvh * var(--ar, 1.7778)));
+    height: min(100dvh, calc(100vw / var(--ar, 1.7778)));
+    border: 0; border-radius: 0;
+  }
+  #hud {
+    position: fixed; left: 50%; top: 50%; z-index: 45;
+    width: 100vw; height: 100dvh;
+    transform: translate(-50%, -50%);
+    pointer-events: none; color: #fff;
+    padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+             max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  #hud.rotated { padding: 12px 16px; }
+  #hud[hidden] { display: none; }
+  #hud button { pointer-events: auto; }
+  .hud-rec {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .8);
+  }
+  .hud-rec .dot { color: #ff4d4d; animation: blink 1s steps(2, start) infinite; }
+  @keyframes blink { to { visibility: hidden; } }
+  .hud-top { position: absolute; top: 12px; left: 16px; display: flex; align-items: center; gap: 10px; }
+  #hud:not(.rotated) .hud-top { top: max(12px, env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left)); }
+  #hudFlip { padding: 6px 10px; font-size: 14px; background: rgba(0, 0, 0, .45); color: #fff; box-shadow: 0 0 0 1px rgba(255, 255, 255, .5) inset; }
+  .hud-cards {
+    position: absolute; top: 50%; right: 16px; transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: 10px; width: 150px;
+  }
+  #hud:not(.rotated) .hud-cards { right: max(16px, env(safe-area-inset-right)); }
+  .hud-card {
+    background: rgba(23, 94, 129, .78); border: 2px solid rgba(11, 42, 60, .9); border-radius: 10px;
+    text-align: center; padding: 8px 6px; transition: transform .12s, background .3s;
+  }
+  .hud-card .t { font-size: 14px; opacity: .9; }
+  .hud-miss-row { display: flex; gap: 6px; }
+  .hud-miss-row .hud-card { flex: 1; padding: 8px 2px; }
+  .hud-miss-row .hud-card .t { font-size: 12px; }
+  .hud-card .v { font-size: 30px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  .hud-card.flash { transform: scale(1.06); background: rgba(31, 134, 184, .95); }
+  .hud-card.flash-bad { transform: scale(1.06); background: rgba(178, 59, 59, .95); }
+  #hudStop {
+    position: absolute; bottom: 12px; left: 16px;
+    background: var(--danger); color: #fff; box-shadow: none; font-weight: 700; font-size: 17px; padding: 12px 22px;
+  }
+  #hud:not(.rotated) #hudStop { bottom: max(12px, env(safe-area-inset-bottom)); left: max(16px, env(safe-area-inset-left)); }
+  @media (max-height: 380px) {
+    .hud-cards { width: 128px; gap: 6px; }
+    .hud-card .v { font-size: 24px; }
+  }
 </style>
 </head>
 <body>
@@ -161,15 +228,39 @@
       <div class="title">倒數計時</div>
       <div class="value" id="timerValue">03:00</div>
     </div>
-    <div class="card" id="mistakeCard">
-      <div class="title">失誤次數</div>
-      <div class="value" id="mistakeValue">0 次</div>
+    <div class="miss-row">
+      <div class="card" id="leftMissCard">
+        <div class="title">左方失誤</div>
+        <div class="value" id="leftMissValue">0 次</div>
+      </div>
+      <div class="card" id="rightMissCard">
+        <div class="title">右方失誤</div>
+        <div class="value" id="rightMissValue">0 次</div>
+      </div>
     </div>
   </aside>
 </main>
 
+<!-- 錄影中疊在畫面上的資訊（手機鎖定直向時會自動轉 90°，讓橫拿手機也能正著看） -->
+<div id="hud" hidden>
+  <div class="hud-top">
+    <span class="hud-rec"><span class="dot">●</span> REC <span id="hudTime">00:00</span></span>
+    <button id="hudFlip" title="文字方向相反時按這裡">⟲ 翻轉</button>
+  </div>
+  <div class="hud-cards">
+    <div class="hud-card" id="hudHitCard"><div class="t">擊球次數</div><div class="v" id="hudHits">0</div></div>
+    <div class="hud-card"><div class="t">倒數計時</div><div class="v" id="hudTimer">03:00</div></div>
+    <div class="hud-miss-row">
+      <div class="hud-card" id="hudLeftMissCard"><div class="t">左方失誤</div><div class="v" id="hudLeftMiss">0</div></div>
+      <div class="hud-card" id="hudRightMissCard"><div class="t">右方失誤</div><div class="v" id="hudRightMiss">0</div></div>
+    </div>
+  </div>
+  <button id="hudStop">■ 停止</button>
+</div>
+
 <dialog id="resultDlg">
   <h2>測試結果</h2>
+  <p class="hint" id="resRotate" hidden>📱 請把手機轉回直向，查看完整結果</p>
   <div class="big" id="resHits"></div>
   <div class="big" id="resMistakes"></div>
   <div id="resTime"></div>
@@ -185,6 +276,14 @@
   <label>測試時間（分鐘）<input id="setMinutes" type="number" min="0.5" max="60" step="0.5"></label>
   <label>失誤判定（秒）<input id="setGap" type="number" min="1" max="15" step="0.5"></label>
   <p class="hint">失誤判定：球過網後超過這個秒數都沒有下一次過網，就算失誤 1 次。</p>
+  <label>偵測靈敏度
+    <select id="setSens">
+      <option value="1">標準</option>
+      <option value="2">高（球比較小時）</option>
+      <option value="4">很高（離球網很遠時）</option>
+    </select>
+  </label>
+  <p class="hint">開相機後、按開始錄影前，畫面上會顯示「偵測測試」：把球打過網，看到「✓ 偵測到過網」就代表位置和靈敏度都 OK。都沒反應就把黃色框重新框在球飛過的地方，或把靈敏度調高。</p>
   <p class="hint">感應區（黃色框）：沒有在錄影時，直接在畫面上拖曳就能重新框選。請框在<b>網子正上方、沒有球員經過</b>的位置。</p>
   <div class="row">
     <button id="resetRegion">感應區還原預設</button>
@@ -204,7 +303,13 @@ const MERGE_SEC = 0.1;         // 間隔小於此秒數的動態合併為同一�
 const MIN_INTERVAL_SEC = 0.3;  // 兩次過網最短間隔
 const DEFAULT_REGION = [0.40, 0.60, 0.23, 0.45];  // 感應區 (x0, x1, y0, y1)，畫面寬高比例
 
-const settings = { region: DEFAULT_REGION.slice(), minutes: 3, mistakeGap: 3 };
+const settings = { region: DEFAULT_REGION.slice(), minutes: 3, mistakeGap: 3, sensitivity: 1 };
+/** 靈敏度：1 = 標準（與 Python 版相同）、2 = 高、4 = 很高（球很小、離鏡頭很遠時用） */
+function energyThreshold() { return ENERGY_TH / (settings.sensitivity || 1); }
+/** 靈敏度越高，像素亮度差異的門檻越低（球和背景顏色接近時也抓得到） */
+function diffThreshold() { const s = settings.sensitivity || 1; return s >= 4 ? 18 : s >= 2 ? 24 : DIFF_TH; }
+const GLOBAL_CHANGE_FRAC = 0.25;  // 感應區超過 25% 在變，視為手機晃動 / 光線變化，不是球
+const MAX_EVENT_SEC = 1.0;        // 連續動態超過 1 秒不可能是一顆球，視為雜訊
 try {
   const saved = JSON.parse(localStorage.getItem("hitcounter-settings") || "null");
   if (saved) Object.assign(settings, saved);
@@ -224,7 +329,7 @@ class TripwireCounter {
     this.y0 = Math.trunc(ry0 * height); this.y1 = Math.trunc(ry1 * height);
     this.w = this.x1 - this.x0;
     this.h = this.y1 - this.y0;
-    this.minPixels = ENERGY_TH * this.w * this.h;
+    this.minPixels = energyThreshold() * this.w * this.h;
     this.prev = null;
     this.crossings = [];   // [{t, dir}]
     this.event = [];       // 進行中的事件 [{t, energy}]
@@ -242,17 +347,31 @@ class TripwireCounter {
     }
     if (!this.prev) { this.prev = gray; return []; }
 
+    // 手機自動調整亮度、燈光閃爍時，整個畫面會一起變亮 / 變暗：先扣掉整體亮度的變化
+    let sumCur = 0, sumPrev = 0;
+    for (let i = 0; i < n; i += 4) { sumCur += gray[i]; sumPrev += this.prev[i]; }
+    const shift = Math.round((sumCur - sumPrev) / Math.ceil(n / 4));
+    const th = diffThreshold();
     let count = 0, sumX = 0;
     for (let i = 0; i < n; i++) {
-      if (Math.abs(gray[i] - this.prev[i]) > DIFF_TH) { count++; sumX += i % this.w; }
+      if (Math.abs(gray[i] - this.prev[i] - shift) > th) { count++; sumX += i % this.w; }
     }
     this.prev = gray;
     this.lastEnergy = count;
+    // 感應區大部分都在變 = 手機晃動或光線劇變，不是球（球只佔感應區一小塊）
+    this.shaking = count > GLOBAL_CHANGE_FRAC * n;
+    if (this.shaking) count = 0;
     const cx = count > 15 ? sumX / count : NaN;
 
     const found = [];
     if (this.event.length && t - this.event[this.event.length - 1].t > MERGE_SEC + 1e-6) {
       found.push(...this._finish());
+    }
+    // 球飛過感應區只要零點幾秒；一直「有動態」超過 MAX_EVENT_SEC 代表是雜訊（晃動、閃爍、有人站在框裡），
+    // 丟掉重來，否則會一直等這個「事件」結束而永遠算不到球
+    if (this.event.length && t - this.event[0].t > MAX_EVENT_SEC) {
+      this.event = []; this.eventCx = [];
+      this.noisy = (this.noisy || 0) + 1;
     }
     if (this.event.length) this.eventCx.push({ t, cx });
     if (count > this.minPixels) {
@@ -263,6 +382,18 @@ class TripwireCounter {
   }
 
   flush() { return this.event.length ? this._finish() : []; }
+
+  /** 畫面尺寸改變（例如錄影中手機轉向）：重新換算感應區像素，已計的次數保留 */
+  resize(width, height, region) {
+    this.flush();
+    const [rx0, rx1, ry0, ry1] = region;
+    this.x0 = Math.trunc(rx0 * width);  this.x1 = Math.trunc(rx1 * width);
+    this.y0 = Math.trunc(ry0 * height); this.y1 = Math.trunc(ry1 * height);
+    this.w = this.x1 - this.x0;
+    this.h = this.y1 - this.y0;
+    this.minPixels = energyThreshold() * this.w * this.h;
+    this.prev = null;
+  }
 
   _finish() {
     const ev = this.event;
@@ -291,6 +422,30 @@ function detectMistakes(hitTimes, gap, endTime) {
   return out;
 }
 
+/** 失誤分左右（與 main.py / count_hits.py 的 detect_mistakes_by_side 相同規則）：
+ *  最後一球 L>R（左打到右）沒有被打回 → 右方失誤；R>L → 左方失誤；
+ *  方向判斷不出來（?）時用「前一球的反方向」推算。左右指攝影機畫面的左右。
+ *  回傳 [{t, side: "L" | "R" | "?"}] */
+function detectMistakesBySide(crossings, gap, endTime) {
+  // 方向判斷不出來的球：用最近一顆知道方向的球推算（來回打，所以隔奇數顆就是反方向）
+  const known = crossings.map((c, i) => (c.dir === "L>R" || c.dir === "R>L") ? i : -1).filter(i => i >= 0);
+  const flip = d => d === "L>R" ? "R>L" : "L>R";
+  const dirs = crossings.map((c, i) => {
+    if (c.dir === "L>R" || c.dir === "R>L") return c.dir;
+    let best = -1;
+    for (const k of known) if (best < 0 || Math.abs(k - i) < Math.abs(best - i) || (Math.abs(k - i) === Math.abs(best - i) && k < i)) best = k;
+    if (best < 0) return "?";
+    return Math.abs(best - i) % 2 === 0 ? crossings[best].dir : flip(crossings[best].dir);
+  });
+  const out = [];
+  for (let i = 0; i < crossings.length; i++) {
+    const h = crossings[i].t, next = crossings[i + 1];
+    const miss = next !== undefined ? next.t - h > gap : endTime - h >= gap;
+    if (miss) out.push({ t: h + gap, side: dirs[i] === "L>R" ? "R" : dirs[i] === "R>L" ? "L" : "?" });
+  }
+  return out;
+}
+
 /* ═══════════════════════════════════════════════
    3. 畫面與狀態
    ═══════════════════════════════════════════════ */
@@ -304,7 +459,7 @@ let mode = "idle";        // idle | preview | recording | file
 let facing = "environment";
 let stream = null, recorder = null, chunks = [], recordUrl = null;
 let counter = null, startTime = 0, elapsed = 0, frameHandle = null;
-let wakeLock = null, lastHitCount = 0, lastMistakeCount = 0;
+let wakeLock = null, lastHitCount = 0, lastLeftMiss = 0, lastRightMiss = 0;
 
 function fmt(sec) {
   sec = Math.max(0, Math.ceil(sec - 1e-6));
@@ -322,19 +477,30 @@ function updateCards(final = false) {
   const hits = counter ? counter.crossings.map(c => c.t) : [];
   // 過網約 0.1 秒後才確認，進行中留 0.2 秒緩衝避免誤判失誤；結束時算到最後
   const endT = final ? elapsed : elapsed - 0.2;
-  const mistakes = detectMistakes(hits, settings.mistakeGap, endT).filter(t => t <= elapsed);
+  const mistakes = detectMistakesBySide(counter ? counter.crossings : [], settings.mistakeGap, endT)
+    .filter(m => m.t <= elapsed);
+  const left = mistakes.filter(m => m.side === "L").length;
+  const right = mistakes.filter(m => m.side === "R").length;
   $("hitValue").textContent = `Hit 到 ${hits.length} 次球`;
   $("hitSub").textContent = mode === "recording" ? "錄影中，邊錄邊計算"
                           : mode === "file" ? "分析中..." : `全片共 ${hits.length} 次`;
-  $("mistakeValue").textContent = `${mistakes.length} 次`;
-  if (hits.length > lastHitCount) flash($("hitCard"), "flash");
-  if (mistakes.length > lastMistakeCount) flash($("mistakeCard"), "flash-bad");
-  lastHitCount = hits.length; lastMistakeCount = mistakes.length;
-  return { hits: hits.length, mistakes: mistakes.length };
+  $("leftMissValue").textContent = `${left} 次`;
+  $("rightMissValue").textContent = `${right} 次`;
+  // 錄影中疊在畫面上的數字
+  $("hudHits").textContent = hits.length;
+  $("hudTimer").textContent = fmt(limit - elapsed);
+  $("hudLeftMiss").textContent = left;
+  $("hudRightMiss").textContent = right;
+  $("hudTime").textContent = fmt(elapsed);
+  if (hits.length > lastHitCount) { flash($("hitCard"), "flash"); flash($("hudHitCard"), "flash"); }
+  if (left > lastLeftMiss) { flash($("leftMissCard"), "flash-bad"); flash($("hudLeftMissCard"), "flash-bad"); }
+  if (right > lastRightMiss) { flash($("rightMissCard"), "flash-bad"); flash($("hudRightMissCard"), "flash-bad"); }
+  lastHitCount = hits.length; lastLeftMiss = left; lastRightMiss = right;
+  return { hits: hits.length, mistakes: mistakes.length, left, right };
 }
 
 function resetCounts() {
-  counter = null; elapsed = 0; lastHitCount = 0; lastMistakeCount = 0;
+  counter = null; elapsed = 0; lastHitCount = 0; lastLeftMiss = 0; lastRightMiss = 0;
   updateCards();
 }
 
@@ -356,13 +522,15 @@ function drawOverlay() {
     x0 = Math.min(dragStart.x, dragNow.x); x1 = Math.max(dragStart.x, dragNow.x);
     y0 = Math.min(dragStart.y, dragNow.y); y1 = Math.max(dragStart.y, dragNow.y);
   }
-  const active = counter && counter.lastEnergy > counter.minPixels;
+  const c = mode === "preview" ? probe : counter;
+  const active = c && c.lastEnergy > c.minPixels;
   octx.lineWidth = 3 * (window.devicePixelRatio || 1);
   octx.strokeStyle = active ? "#ff4d4d" : "#ffe14d";
   octx.strokeRect(x0 * W, y0 * H, (x1 - x0) * W, (y1 - y0) * H);
   octx.fillStyle = octx.strokeStyle;
   octx.font = `${14 * (window.devicePixelRatio || 1)}px sans-serif`;
   octx.fillText("感應區", x0 * W + 4, y0 * H - 6);
+  drawProbe(W, H, window.devicePixelRatio || 1);
 }
 function stagePoint(e) {
   const r = stage.getBoundingClientRect();
@@ -382,12 +550,63 @@ stage.addEventListener("pointerup", () => {
   if (x1 - x0 > 0.03 && y1 - y0 > 0.03) {
     settings.region = [x0, x1, y0, y1].map(v => Math.round(v * 1000) / 1000);
     saveSettings();
+    probe = null;  // 新的感應區重新測試
     setStatus("已更新感應區");
   }
   dragStart = dragNow = null;
   drawOverlay();
 });
-window.addEventListener("resize", sizeOverlay);
+window.addEventListener("resize", () => { sizeOverlay(); layoutHud(); });
+
+/* ── 錄影中的全螢幕畫面 ──
+   手機沒鎖直向：橫拿時瀏覽器自己轉成橫向，資訊正常顯示。
+   手機鎖定直向：網頁仍是直的，用重力感應判斷手機往哪邊橫拿，把資訊轉 90° 讓它是正的。 */
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+              (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+let hudRot = 90, motionOn = false;
+
+function layoutHud() {
+  const hud = $("hud");
+  if (hud.hidden) return;
+  const portrait = window.innerHeight > window.innerWidth;
+  hud.classList.toggle("rotated", portrait);
+  $("hudFlip").hidden = !portrait;
+  if (portrait) {
+    hud.style.width = window.innerHeight + "px";
+    hud.style.height = window.innerWidth + "px";
+    hud.style.transform = `translate(-50%, -50%) rotate(${hudRot}deg)`;
+  } else {
+    hud.style.width = hud.style.height = hud.style.transform = "";
+  }
+}
+function onMotion(e) {
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x == null) return;
+  const x = isIOS ? g.x : -g.x;          // iOS 與 Android 的正負號相反
+  const next = x < -5 ? 90 : x > 5 ? -90 : hudRot;  // 手機頂端朝左 → 轉 90°；朝右 → 轉 -90°
+  if (next !== hudRot) { hudRot = next; layoutHud(); }
+}
+/* iPhone 要在按鈕被按下時才能詢問「動作與方向」權限 */
+function enableMotion() {
+  if (motionOn || !("DeviceMotionEvent" in window)) return;
+  const on = () => { window.addEventListener("devicemotion", onMotion); motionOn = true; };
+  if (typeof DeviceMotionEvent.requestPermission === "function") {
+    DeviceMotionEvent.requestPermission().then(r => { if (r === "granted") on(); }).catch(() => {});
+  } else {
+    on();
+  }
+}
+function enterRecordingView() {
+  document.body.classList.add("recording");
+  $("hud").hidden = false;
+  layoutHud();
+  requestAnimationFrame(sizeOverlay);
+}
+function exitRecordingView() {
+  document.body.classList.remove("recording");
+  $("hud").hidden = true;
+  requestAnimationFrame(sizeOverlay);
+}
 
 /* ═══════════════════════════════════════════════
    4. 逐幀處理
@@ -395,13 +614,60 @@ window.addEventListener("resize", sizeOverlay);
 function prepareCounter() {
   const w = video.videoWidth, h = video.videoHeight;
   counter = new TripwireCounter(w, h, settings.region);
+  counter.vw = w; counter.vh = h;
   grab.width = counter.w; grab.height = counter.h;
 }
 
-function processFrame(t) {
-  if (!counter || counter.w < 2 || counter.h < 2) return;
-  gctx.drawImage(video, counter.x0, counter.y0, counter.w, counter.h, 0, 0, counter.w, counter.h);
-  counter.update(gctx.getImageData(0, 0, counter.w, counter.h).data, t);
+function processFrame(t, c = counter) {
+  if (!c || c.w < 2 || c.h < 2) return [];
+  if (grab.width !== c.w || grab.height !== c.h) { grab.width = c.w; grab.height = c.h; }
+  gctx.drawImage(video, c.x0, c.y0, c.w, c.h, 0, 0, c.w, c.h);
+  return c.update(gctx.getImageData(0, 0, c.w, c.h).data, t);
+}
+
+/* ── 偵測測試：開相機後（還沒錄影）就先跑計數，讓使用者確認球打過網時有被偵測到 ── */
+let probe = null, probeHits = 0, probeLastHit = -10, probePeak = 0, probePeakT = 0;
+function runProbe(nowMs) {
+  const t = nowMs / 1000;
+  if (!probe || probe.vw !== video.videoWidth || probe.vh !== video.videoHeight) {
+    if (!video.videoWidth) return;
+    probe = new TripwireCounter(video.videoWidth, video.videoHeight, settings.region);
+    probe.vw = video.videoWidth; probe.vh = video.videoHeight;
+    probeHits = 0; probeLastHit = -10; probePeak = 0;
+  }
+  const found = processFrame(t, probe);
+  if (found.length) { probeHits += found.length; probeLastHit = t; }
+  // 最近 2 秒內最大的動態量（相對於門檻），顯示在畫面上
+  const ratio = probe.lastEnergy / Math.max(1, probe.minPixels);
+  if (ratio >= probePeak || t - probePeakT > 2) { probePeak = ratio; probePeakT = t; }
+  probe.lastT = t;
+  probe.frames = (probe.frames || 0) + 1;
+  // 感應區平均亮度：一直是 0 代表瀏覽器讀不到相機畫面（不是位置問題）
+  if (probe.prev && probe.frames % 10 === 0) {
+    let s = 0, n = 0;
+    for (let i = 0; i < probe.prev.length; i += 7) { s += probe.prev[i]; n++; }
+    probe.bright = Math.round(s / Math.max(1, n));
+  }
+}
+function drawProbe(W, H, dpr) {
+  if (mode !== "preview" || !probe) return;
+  const recent = probe.lastT - probeLastHit < 1.5;
+  const lines = [
+    recent ? "✓ 偵測到過網！"
+      : probe.shaking ? "⚠ 畫面在晃動或光線變化太大，請把手機固定好"
+      : "偵測測試：把球打過網看看",
+    `已偵測 ${probeHits} 次　動態量 ${Math.round(probePeak * 100)}%（超過 100% 才算球）`,
+    `畫面 ${video.videoWidth}×${video.videoHeight}　亮度 ${probe.bright ?? "-"}　幀數 ${probe.frames || 0}`,
+  ];
+  const fs = Math.max(10, Math.min(15, W / dpr / 30));  // 手機直向畫面較窄，字跟著縮小
+  octx.font = `bold ${fs * dpr}px sans-serif`;
+  const pad = 6 * dpr, lh = fs * 1.45 * dpr;
+  const bw = Math.max(...lines.map(s => octx.measureText(s).width)) + pad * 2;
+  octx.fillStyle = recent ? "rgba(20,140,60,.85)" : "rgba(0,0,0,.6)";
+  const n = lines.length;
+  octx.fillRect(pad, H - lh * n - pad * 3, bw, lh * n + pad * 2);
+  octx.fillStyle = "#fff";
+  lines.forEach((s, i) => octx.fillText(s, pad * 2, H - lh * (n - 1 - i) - pad * 2 - 6 * dpr));
 }
 
 let lastMediaTime = -1;
@@ -421,6 +687,8 @@ function loop(token, now, meta) {
       $("timeText").innerHTML = mode === "recording" ? `<span class="rec">● REC ${fmt(t)}</span>` : `${fmt(t)} / ${fmt(video.duration || 0)}`;
       if (elapsed >= settings.minutes * 60) { stopSession(); return; }
     }
+  } else if (mode === "preview") {
+    runProbe(now);
   }
   drawOverlay();
   scheduleFrame(token);
@@ -469,6 +737,18 @@ function waitForSize() {
     requestAnimationFrame(sizeOverlay);
   });
 }
+/* 手機轉向時相機畫面的寬高會對調：更新畫面比例；錄影中則重新換算感應區（次數保留） */
+video.addEventListener("resize", () => {
+  if (!video.videoWidth || !video.videoHeight) return;
+  stage.style.setProperty("--ar", (video.videoWidth / video.videoHeight).toFixed(4));
+  // 只有寬高真的改變才重算（有些手機開始錄影時會多送一次 resize，重設會漏掉正在飛的球）
+  if (counter && mode === "recording" && (counter.vw !== video.videoWidth || counter.vh !== video.videoHeight)) {
+    counter.vw = video.videoWidth; counter.vh = video.videoHeight;
+    counter.resize(video.videoWidth, video.videoHeight, settings.region);
+    grab.width = Math.max(1, counter.w); grab.height = Math.max(1, counter.h);
+  }
+  requestAnimationFrame(sizeOverlay);
+});
 function stopStream() {
   if (stream) stream.getTracks().forEach(t => t.stop());
   stream = null;
@@ -542,7 +822,9 @@ async function saveToFolder(blob, name) {
 
 function startRecording() {
   if (saveDir) ensureSavePermission(); // 趁按下按鈕時取得寫入權限，錄完才能自動存
+  if (window.matchMedia("(pointer: coarse)").matches) enableMotion(); // 手機才需要判斷橫拿方向
   mode = "recording";
+  enterRecordingView();
   prepareCounter();
   resetCountsKeepCounter();
   startTime = performance.now();
@@ -561,7 +843,7 @@ function startRecording() {
   setStatus("錄影中…按「停止」結束，時間到會自動停止");
   updateButtons();
 }
-function resetCountsKeepCounter() { elapsed = 0; lastHitCount = 0; lastMistakeCount = 0; updateCards(); }
+function resetCountsKeepCounter() { elapsed = 0; lastHitCount = 0; lastLeftMiss = 0; lastRightMiss = 0; updateCards(); }
 
 function stopSession() {
   if (mode !== "recording" && mode !== "file") return;
@@ -574,6 +856,7 @@ function stopSession() {
   } else {
     mode = "preview";
   }
+  exitRecordingView();
   releaseWakeLock();
   const show = () => showResult(result, wasFile);
   if (recorder && recorder.state !== "inactive") {
@@ -613,12 +896,20 @@ function updateCardsFinal() {
 }
 function showResult(r, wasFile) {
   $("resHits").textContent = `擊球（過網）：${r.hits} 次`;
-  $("resMistakes").textContent = `失誤：${r.mistakes} 次`;
+  $("resMistakes").textContent = `失誤：${r.mistakes} 次（左方 ${r.left} 次、右方 ${r.right} 次）`;
   $("resTime").textContent = `${wasFile ? "影片長度" : "錄影時間"}：${fmt(elapsed)}`;
   $("downloadLink").hidden = wasFile || !recordUrl;
   if (wasFile || !recordUrl) $("resSaved").textContent = "";
+  updateRotateHint();
+  window.scrollTo(0, 0);
   $("resultDlg").showModal();
 }
+/* 錄完如果手機還是橫的，提醒轉回直向；轉回來後提示自動消失 */
+function updateRotateHint() {
+  const phone = window.matchMedia("(pointer: coarse)").matches;
+  $("resRotate").hidden = !(phone && window.innerWidth > window.innerHeight);
+}
+window.addEventListener("resize", updateRotateHint);
 
 async function requestWakeLock() {
   try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
@@ -668,23 +959,29 @@ $("flipBtn").addEventListener("click", () => {
   if (mode === "preview") startPreview();
 });
 $("resClose").addEventListener("click", () => $("resultDlg").close());
+$("hudStop").addEventListener("click", () => { if (mode === "recording") stopSession(); });
+$("hudFlip").addEventListener("click", () => { hudRot = -hudRot; layoutHud(); });
 $("folderBtn").addEventListener("click", () => { if (mode !== "recording") pickSaveDir(); });
 $("settingsBtn").addEventListener("click", () => {
   $("setMinutes").value = settings.minutes;
   $("setGap").value = settings.mistakeGap;
+  $("setSens").value = String(settings.sensitivity || 1);
   $("settingsDlg").showModal();
 });
 $("settingsSave").addEventListener("click", () => {
   const m = parseFloat($("setMinutes").value), g = parseFloat($("setGap").value);
   if (m > 0) settings.minutes = m;
   if (g > 0) settings.mistakeGap = g;
+  settings.sensitivity = parseFloat($("setSens").value) || 1;
   saveSettings();
+  probe = null;  // 用新的靈敏度重新測試
   $("settingsDlg").close();
   updateCards();
 });
 $("resetRegion").addEventListener("click", () => {
   settings.region = DEFAULT_REGION.slice();
   saveSettings();
+  probe = null;
   drawOverlay();
   setStatus("感應區已還原預設");
 });

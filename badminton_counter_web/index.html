@@ -276,6 +276,14 @@
   <label>測試時間（分鐘）<input id="setMinutes" type="number" min="0.5" max="60" step="0.5"></label>
   <label>失誤判定（秒）<input id="setGap" type="number" min="1" max="15" step="0.5"></label>
   <p class="hint">失誤判定：球過網後超過這個秒數都沒有下一次過網，就算失誤 1 次。</p>
+  <label>偵測靈敏度
+    <select id="setSens">
+      <option value="1">標準</option>
+      <option value="2">高（球比較小時）</option>
+      <option value="4">很高（離球網很遠時）</option>
+    </select>
+  </label>
+  <p class="hint">開相機後、按開始錄影前，畫面上會顯示「偵測測試」：把球打過網，看到「✓ 偵測到過網」就代表位置和靈敏度都 OK。都沒反應就把黃色框重新框在球飛過的地方，或把靈敏度調高。</p>
   <p class="hint">感應區（黃色框）：沒有在錄影時，直接在畫面上拖曳就能重新框選。請框在<b>網子正上方、沒有球員經過</b>的位置。</p>
   <div class="row">
     <button id="resetRegion">感應區還原預設</button>
@@ -295,7 +303,13 @@ const MERGE_SEC = 0.1;         // 間隔小於此秒數的動態合併為同一�
 const MIN_INTERVAL_SEC = 0.3;  // 兩次過網最短間隔
 const DEFAULT_REGION = [0.40, 0.60, 0.23, 0.45];  // 感應區 (x0, x1, y0, y1)，畫面寬高比例
 
-const settings = { region: DEFAULT_REGION.slice(), minutes: 3, mistakeGap: 3 };
+const settings = { region: DEFAULT_REGION.slice(), minutes: 3, mistakeGap: 3, sensitivity: 1 };
+/** 靈敏度：1 = 標準（與 Python 版相同）、2 = 高、4 = 很高（球很小、離鏡頭很遠時用） */
+function energyThreshold() { return ENERGY_TH / (settings.sensitivity || 1); }
+/** 靈敏度越高，像素亮度差異的門檻越低（球和背景顏色接近時也抓得到） */
+function diffThreshold() { const s = settings.sensitivity || 1; return s >= 4 ? 18 : s >= 2 ? 24 : DIFF_TH; }
+const GLOBAL_CHANGE_FRAC = 0.25;  // 感應區超過 25% 在變，視為手機晃動 / 光線變化，不是球
+const MAX_EVENT_SEC = 1.0;        // 連續動態超過 1 秒不可能是一顆球，視為雜訊
 try {
   const saved = JSON.parse(localStorage.getItem("hitcounter-settings") || "null");
   if (saved) Object.assign(settings, saved);
@@ -315,7 +329,7 @@ class TripwireCounter {
     this.y0 = Math.trunc(ry0 * height); this.y1 = Math.trunc(ry1 * height);
     this.w = this.x1 - this.x0;
     this.h = this.y1 - this.y0;
-    this.minPixels = ENERGY_TH * this.w * this.h;
+    this.minPixels = energyThreshold() * this.w * this.h;
     this.prev = null;
     this.crossings = [];   // [{t, dir}]
     this.event = [];       // 進行中的事件 [{t, energy}]
@@ -333,17 +347,31 @@ class TripwireCounter {
     }
     if (!this.prev) { this.prev = gray; return []; }
 
+    // 手機自動調整亮度、燈光閃爍時，整個畫面會一起變亮 / 變暗：先扣掉整體亮度的變化
+    let sumCur = 0, sumPrev = 0;
+    for (let i = 0; i < n; i += 4) { sumCur += gray[i]; sumPrev += this.prev[i]; }
+    const shift = Math.round((sumCur - sumPrev) / Math.ceil(n / 4));
+    const th = diffThreshold();
     let count = 0, sumX = 0;
     for (let i = 0; i < n; i++) {
-      if (Math.abs(gray[i] - this.prev[i]) > DIFF_TH) { count++; sumX += i % this.w; }
+      if (Math.abs(gray[i] - this.prev[i] - shift) > th) { count++; sumX += i % this.w; }
     }
     this.prev = gray;
     this.lastEnergy = count;
+    // 感應區大部分都在變 = 手機晃動或光線劇變，不是球（球只佔感應區一小塊）
+    this.shaking = count > GLOBAL_CHANGE_FRAC * n;
+    if (this.shaking) count = 0;
     const cx = count > 15 ? sumX / count : NaN;
 
     const found = [];
     if (this.event.length && t - this.event[this.event.length - 1].t > MERGE_SEC + 1e-6) {
       found.push(...this._finish());
+    }
+    // 球飛過感應區只要零點幾秒；一直「有動態」超過 MAX_EVENT_SEC 代表是雜訊（晃動、閃爍、有人站在框裡），
+    // 丟掉重來，否則會一直等這個「事件」結束而永遠算不到球
+    if (this.event.length && t - this.event[0].t > MAX_EVENT_SEC) {
+      this.event = []; this.eventCx = [];
+      this.noisy = (this.noisy || 0) + 1;
     }
     if (this.event.length) this.eventCx.push({ t, cx });
     if (count > this.minPixels) {
@@ -363,7 +391,7 @@ class TripwireCounter {
     this.y0 = Math.trunc(ry0 * height); this.y1 = Math.trunc(ry1 * height);
     this.w = this.x1 - this.x0;
     this.h = this.y1 - this.y0;
-    this.minPixels = ENERGY_TH * this.w * this.h;
+    this.minPixels = energyThreshold() * this.w * this.h;
     this.prev = null;
   }
 
@@ -399,12 +427,15 @@ function detectMistakes(hitTimes, gap, endTime) {
  *  方向判斷不出來（?）時用「前一球的反方向」推算。左右指攝影機畫面的左右。
  *  回傳 [{t, side: "L" | "R" | "?"}] */
 function detectMistakesBySide(crossings, gap, endTime) {
-  let prevDir = null;
-  const dirs = crossings.map(c => {
-    let d = c.dir;
-    if (d !== "L>R" && d !== "R>L" && prevDir) d = prevDir === "L>R" ? "R>L" : "L>R";
-    if (d === "L>R" || d === "R>L") prevDir = d;
-    return d;
+  // 方向判斷不出來的球：用最近一顆知道方向的球推算（來回打，所以隔奇數顆就是反方向）
+  const known = crossings.map((c, i) => (c.dir === "L>R" || c.dir === "R>L") ? i : -1).filter(i => i >= 0);
+  const flip = d => d === "L>R" ? "R>L" : "L>R";
+  const dirs = crossings.map((c, i) => {
+    if (c.dir === "L>R" || c.dir === "R>L") return c.dir;
+    let best = -1;
+    for (const k of known) if (best < 0 || Math.abs(k - i) < Math.abs(best - i) || (Math.abs(k - i) === Math.abs(best - i) && k < i)) best = k;
+    if (best < 0) return "?";
+    return Math.abs(best - i) % 2 === 0 ? crossings[best].dir : flip(crossings[best].dir);
   });
   const out = [];
   for (let i = 0; i < crossings.length; i++) {
@@ -491,13 +522,15 @@ function drawOverlay() {
     x0 = Math.min(dragStart.x, dragNow.x); x1 = Math.max(dragStart.x, dragNow.x);
     y0 = Math.min(dragStart.y, dragNow.y); y1 = Math.max(dragStart.y, dragNow.y);
   }
-  const active = counter && counter.lastEnergy > counter.minPixels;
+  const c = mode === "preview" ? probe : counter;
+  const active = c && c.lastEnergy > c.minPixels;
   octx.lineWidth = 3 * (window.devicePixelRatio || 1);
   octx.strokeStyle = active ? "#ff4d4d" : "#ffe14d";
   octx.strokeRect(x0 * W, y0 * H, (x1 - x0) * W, (y1 - y0) * H);
   octx.fillStyle = octx.strokeStyle;
   octx.font = `${14 * (window.devicePixelRatio || 1)}px sans-serif`;
   octx.fillText("感應區", x0 * W + 4, y0 * H - 6);
+  drawProbe(W, H, window.devicePixelRatio || 1);
 }
 function stagePoint(e) {
   const r = stage.getBoundingClientRect();
@@ -517,6 +550,7 @@ stage.addEventListener("pointerup", () => {
   if (x1 - x0 > 0.03 && y1 - y0 > 0.03) {
     settings.region = [x0, x1, y0, y1].map(v => Math.round(v * 1000) / 1000);
     saveSettings();
+    probe = null;  // 新的感應區重新測試
     setStatus("已更新感應區");
   }
   dragStart = dragNow = null;
@@ -580,13 +614,60 @@ function exitRecordingView() {
 function prepareCounter() {
   const w = video.videoWidth, h = video.videoHeight;
   counter = new TripwireCounter(w, h, settings.region);
+  counter.vw = w; counter.vh = h;
   grab.width = counter.w; grab.height = counter.h;
 }
 
-function processFrame(t) {
-  if (!counter || counter.w < 2 || counter.h < 2) return;
-  gctx.drawImage(video, counter.x0, counter.y0, counter.w, counter.h, 0, 0, counter.w, counter.h);
-  counter.update(gctx.getImageData(0, 0, counter.w, counter.h).data, t);
+function processFrame(t, c = counter) {
+  if (!c || c.w < 2 || c.h < 2) return [];
+  if (grab.width !== c.w || grab.height !== c.h) { grab.width = c.w; grab.height = c.h; }
+  gctx.drawImage(video, c.x0, c.y0, c.w, c.h, 0, 0, c.w, c.h);
+  return c.update(gctx.getImageData(0, 0, c.w, c.h).data, t);
+}
+
+/* ── 偵測測試：開相機後（還沒錄影）就先跑計數，讓使用者確認球打過網時有被偵測到 ── */
+let probe = null, probeHits = 0, probeLastHit = -10, probePeak = 0, probePeakT = 0;
+function runProbe(nowMs) {
+  const t = nowMs / 1000;
+  if (!probe || probe.vw !== video.videoWidth || probe.vh !== video.videoHeight) {
+    if (!video.videoWidth) return;
+    probe = new TripwireCounter(video.videoWidth, video.videoHeight, settings.region);
+    probe.vw = video.videoWidth; probe.vh = video.videoHeight;
+    probeHits = 0; probeLastHit = -10; probePeak = 0;
+  }
+  const found = processFrame(t, probe);
+  if (found.length) { probeHits += found.length; probeLastHit = t; }
+  // 最近 2 秒內最大的動態量（相對於門檻），顯示在畫面上
+  const ratio = probe.lastEnergy / Math.max(1, probe.minPixels);
+  if (ratio >= probePeak || t - probePeakT > 2) { probePeak = ratio; probePeakT = t; }
+  probe.lastT = t;
+  probe.frames = (probe.frames || 0) + 1;
+  // 感應區平均亮度：一直是 0 代表瀏覽器讀不到相機畫面（不是位置問題）
+  if (probe.prev && probe.frames % 10 === 0) {
+    let s = 0, n = 0;
+    for (let i = 0; i < probe.prev.length; i += 7) { s += probe.prev[i]; n++; }
+    probe.bright = Math.round(s / Math.max(1, n));
+  }
+}
+function drawProbe(W, H, dpr) {
+  if (mode !== "preview" || !probe) return;
+  const recent = probe.lastT - probeLastHit < 1.5;
+  const lines = [
+    recent ? "✓ 偵測到過網！"
+      : probe.shaking ? "⚠ 畫面在晃動或光線變化太大，請把手機固定好"
+      : "偵測測試：把球打過網看看",
+    `已偵測 ${probeHits} 次　動態量 ${Math.round(probePeak * 100)}%（超過 100% 才算球）`,
+    `畫面 ${video.videoWidth}×${video.videoHeight}　亮度 ${probe.bright ?? "-"}　幀數 ${probe.frames || 0}`,
+  ];
+  const fs = Math.max(10, Math.min(15, W / dpr / 30));  // 手機直向畫面較窄，字跟著縮小
+  octx.font = `bold ${fs * dpr}px sans-serif`;
+  const pad = 6 * dpr, lh = fs * 1.45 * dpr;
+  const bw = Math.max(...lines.map(s => octx.measureText(s).width)) + pad * 2;
+  octx.fillStyle = recent ? "rgba(20,140,60,.85)" : "rgba(0,0,0,.6)";
+  const n = lines.length;
+  octx.fillRect(pad, H - lh * n - pad * 3, bw, lh * n + pad * 2);
+  octx.fillStyle = "#fff";
+  lines.forEach((s, i) => octx.fillText(s, pad * 2, H - lh * (n - 1 - i) - pad * 2 - 6 * dpr));
 }
 
 let lastMediaTime = -1;
@@ -606,6 +687,8 @@ function loop(token, now, meta) {
       $("timeText").innerHTML = mode === "recording" ? `<span class="rec">● REC ${fmt(t)}</span>` : `${fmt(t)} / ${fmt(video.duration || 0)}`;
       if (elapsed >= settings.minutes * 60) { stopSession(); return; }
     }
+  } else if (mode === "preview") {
+    runProbe(now);
   }
   drawOverlay();
   scheduleFrame(token);
@@ -658,7 +741,9 @@ function waitForSize() {
 video.addEventListener("resize", () => {
   if (!video.videoWidth || !video.videoHeight) return;
   stage.style.setProperty("--ar", (video.videoWidth / video.videoHeight).toFixed(4));
-  if (counter && mode === "recording") {
+  // 只有寬高真的改變才重算（有些手機開始錄影時會多送一次 resize，重設會漏掉正在飛的球）
+  if (counter && mode === "recording" && (counter.vw !== video.videoWidth || counter.vh !== video.videoHeight)) {
+    counter.vw = video.videoWidth; counter.vh = video.videoHeight;
     counter.resize(video.videoWidth, video.videoHeight, settings.region);
     grab.width = Math.max(1, counter.w); grab.height = Math.max(1, counter.h);
   }
@@ -880,19 +965,23 @@ $("folderBtn").addEventListener("click", () => { if (mode !== "recording") pickS
 $("settingsBtn").addEventListener("click", () => {
   $("setMinutes").value = settings.minutes;
   $("setGap").value = settings.mistakeGap;
+  $("setSens").value = String(settings.sensitivity || 1);
   $("settingsDlg").showModal();
 });
 $("settingsSave").addEventListener("click", () => {
   const m = parseFloat($("setMinutes").value), g = parseFloat($("setGap").value);
   if (m > 0) settings.minutes = m;
   if (g > 0) settings.mistakeGap = g;
+  settings.sensitivity = parseFloat($("setSens").value) || 1;
   saveSettings();
+  probe = null;  // 用新的靈敏度重新測試
   $("settingsDlg").close();
   updateCards();
 });
 $("resetRegion").addEventListener("click", () => {
   settings.region = DEFAULT_REGION.slice();
   saveSettings();
+  probe = null;
   drawOverlay();
   setStatus("感應區已還原預設");
 });
