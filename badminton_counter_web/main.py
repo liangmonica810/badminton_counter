@@ -665,7 +665,7 @@ class HitCountWorker(QtCore.QThread):
         try:
             from count_hits import detect_tripwire
             crossings, _ = detect_tripwire(self.video_path, self.region)
-            self.hitsReady.emit(self.token, [int(frame) for frame, _ in crossings])
+            self.hitsReady.emit(self.token, [(int(frame), d) for frame, d in crossings])
         except Exception as exc:
             self.hitsFailed.emit(self.token, str(exc))
 
@@ -674,9 +674,9 @@ class CameraWorker(QtCore.QThread):
     """在背景讀取攝影機：即時顯示畫面、同步錄成 mp4，並邊錄邊計算擊球次數。"""
     started_ok = QtCore.pyqtSignal(float, int, int, str)  # (fps, 寬, 高, 錄影檔路徑)
     frameReady = QtCore.pyqtSignal(QtGui.QImage, int)  # (畫面, 第幾幀)
-    hitsUpdated = QtCore.pyqtSignal(list)  # 目前所有擊球幀
+    hitsUpdated = QtCore.pyqtSignal(list)  # 目前所有過網 [(幀, 方向)]
     failed = QtCore.pyqtSignal(str)
-    stopped = QtCore.pyqtSignal(str, int, list)  # (錄影檔路徑, 總幀數, 擊球幀)
+    stopped = QtCore.pyqtSignal(str, int, list)  # (錄影檔路徑, 總幀數, 過網 [(幀, 方向)])
 
     FPS_PROBE_FRAMES = 20  # 開始錄影前先量測攝影機實際幀率用的幀數
 
@@ -740,7 +740,7 @@ class CameraWorker(QtCore.QThread):
                 nonlocal frame_idx
                 writer.write(frame)
                 if counter.update(frame):
-                    self.hitsUpdated.emit([f for f, _ in counter.crossings])
+                    self.hitsUpdated.emit(list(counter.crossings))
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 image = QtGui.QImage(rgb.data, width, height, 3 * width, QtGui.QImage.Format_RGB888).copy()
                 self.frameReady.emit(image, frame_idx)
@@ -765,7 +765,7 @@ class CameraWorker(QtCore.QThread):
             hits = []
             if counter is not None:
                 counter.flush()
-                hits = [f for f, _ in counter.crossings]
+                hits = list(counter.crossings)
             if writer is not None:
                 self.stopped.emit(self.out_path, frame_idx, hits)
 
@@ -1111,6 +1111,7 @@ class LabelingWindow(QtWidgets.QMainWindow):
         self._current_image_path: Optional[str] = None
         # 目前載入影片的擊球幀，與對應的計算工作
         self._hit_frames: List[int] = []
+        self._crossings: List[Tuple[int, str]] = []  # 過網 (幀, 方向)，用來分左右失誤
         self._hits_ready = False
         self._hit_token = 0
         self._hit_worker: Optional[HitCountWorker] = None
@@ -1359,8 +1360,15 @@ class LabelingWindow(QtWidgets.QMainWindow):
         hit_card, self.frame_label, self.hit_total_label = self._make_card("", "Hit 到 0 次球", 22, "全片共 0 次")
         # 倒數計時（預設 3 分鐘，跟著錄影 / 播放）
         countdown_card, self.countdown_label, _ = self._make_card("倒數計時", "03:00", 30)
-        # 失誤次數：球過網後太久沒有下一次過網，就算失誤一次
-        mistake_card, self.mistake_label, _ = self._make_card("失誤次數", "0 次", 26)
+        # 失誤次數分左右兩格：球過網後太久沒有下一次過網，算「沒把球打回去的那一方」失誤一次
+        left_miss_card, self.left_mistake_label, _ = self._make_card("左方失誤", "0 次", 22)
+        right_miss_card, self.right_mistake_label, _ = self._make_card("右方失誤", "0 次", 22)
+        mistake_row = QtWidgets.QWidget()
+        mistake_layout = QtWidgets.QHBoxLayout(mistake_row)
+        mistake_layout.setContentsMargins(0, 0, 0, 0)
+        mistake_layout.setSpacing(16)
+        mistake_layout.addWidget(left_miss_card, 1)
+        mistake_layout.addWidget(right_miss_card, 1)
 
         right = QtWidgets.QWidget()
         right.setFixedWidth(300)
@@ -1369,7 +1377,7 @@ class LabelingWindow(QtWidgets.QMainWindow):
         right_layout.setSpacing(24)
         right_layout.addWidget(hit_card, 1)
         right_layout.addWidget(countdown_card, 1)
-        right_layout.addWidget(mistake_card, 1)
+        right_layout.addWidget(mistake_row, 1)
 
         # 標註工具的元件仍保留（舊的標註功能會用到），但不顯示在版面上
         self.box_list = QtWidgets.QListWidget()
@@ -1902,7 +1910,7 @@ class LabelingWindow(QtWidgets.QMainWindow):
         self.video_pane.begin_live()
         self.video_pane.setFocus()
         self._hit_token += 1
-        self._hit_frames = []
+        self._hit_frames, self._crossings = [], []
         self._hits_ready = True
         self.frame_label.setText("Hit 到 0 次球")
         self.hit_total_label.setText("攝影機啟動中...")
@@ -1937,25 +1945,33 @@ class LabelingWindow(QtWidgets.QMainWindow):
     def _on_live_frame(self, image: QtGui.QImage, frame_idx: int):
         self.video_pane.show_live_frame(image, frame_idx, self._live_fps)
 
-    def _on_live_hits(self, hit_frames: list):
-        self._hit_frames = sorted(hit_frames)
+    def _set_crossings(self, crossings: list):
+        """記錄所有過網 [(幀, 方向)]：擊球次數用幀，左右失誤用方向。"""
+        self._crossings = sorted((int(f), d) for f, d in crossings)
+        self._hit_frames = [f for f, _ in self._crossings]
+
+    def _on_live_hits(self, crossings: list):
+        self._set_crossings(crossings)
         self._refresh_hit_label(self.video_pane.frame_idx)
 
     def _on_live_failed(self, message: str):
         QtWidgets.QMessageBox.warning(self, "即時錄影", message)
 
-    def _on_live_stopped(self, path: str, total_frames: int, hit_frames: list):
+    def _on_live_stopped(self, path: str, total_frames: int, crossings: list):
         """錄影結束：顯示最終次數，並把錄好的影片載入播放器。"""
-        from count_hits import detect_mistakes
+        from count_hits import detect_mistakes_by_side
         self._on_playback_changed(False)
         self.video_pane.end_live()
         if total_frames <= 0 or not os.path.exists(path):
             return
-        mistakes = detect_mistakes(hit_frames, self._live_fps, total_frames - 1, self.MISTAKE_GAP_SEC)
-        self._load_video(path, autoplay=False, hit_frames=hit_frames)
+        mistakes = detect_mistakes_by_side(crossings, self._live_fps, total_frames - 1, self.MISTAKE_GAP_SEC)
+        left = sum(1 for _, s in mistakes if s == 'L')
+        right = sum(1 for _, s in mistakes if s == 'R')
+        self._load_video(path, autoplay=False, hit_frames=crossings)
         QtWidgets.QMessageBox.information(
             self, "錄影完成",
-            f"共打到 {len(hit_frames)} 次球，失誤 {len(mistakes)} 次。\n\n"
+            f"共打到 {len(crossings)} 次球，失誤 {len(mistakes)} 次"
+            f"（左方 {left} 次、右方 {right} 次）。\n\n"
             f"錄影檔已儲存：\n{path}\n\n可以按「播放」回放檢查。")
 
     def _on_live_thread_finished(self):
@@ -1990,7 +2006,7 @@ class LabelingWindow(QtWidgets.QMainWindow):
             return
         self.setWindowTitle(f"影像標註工具 - {os.path.basename(video_path)}")
         self._hit_token += 1
-        self._hit_frames = []
+        self._hit_frames, self._crossings = [], []
         self._hits_ready = False
         self.frame_label.setText("計算擊球次數中...")
         self.hit_total_label.setText("全片共 — 次")
@@ -2007,11 +2023,11 @@ class LabelingWindow(QtWidgets.QMainWindow):
         if autoplay:
             self.video_pane.play()
 
-    def _on_hits_ready(self, token: int, hit_frames: list):
-        """擊球計算完成後，依目前播放位置更新側邊次數。"""
+    def _on_hits_ready(self, token: int, crossings: list):
+        """擊球計算完成後，依目前播放位置更新側邊次數。crossings: [(幀, 方向)]"""
         if token != self._hit_token:
             return
-        self._hit_frames = sorted(hit_frames)
+        self._set_crossings(crossings)
         self._hits_ready = True
         self._refresh_hit_label(self.video_pane.frame_idx)
 
@@ -2019,7 +2035,7 @@ class LabelingWindow(QtWidgets.QMainWindow):
         """擊球計算失敗時保留影片播放，並把原因顯示在側邊。"""
         if token != self._hit_token:
             return
-        self._hit_frames = []
+        self._hit_frames, self._crossings = [], []
         self._hits_ready = False
         self.frame_label.setText("Hit 到 0 次球")
         self.hit_total_label.setText("無法計算擊球次數")
@@ -2038,21 +2054,23 @@ class LabelingWindow(QtWidgets.QMainWindow):
         self._refresh_mistake_label(frame_idx)
 
     def _refresh_mistake_label(self, frame_idx: int):
-        """失誤次數：球過網後超過 MISTAKE_GAP_SEC 秒都沒有下一次過網，算失誤一次。"""
-        from count_hits import detect_mistakes
+        """失誤次數：球過網後超過 MISTAKE_GAP_SEC 秒都沒有下一次過網，算失誤一次。
+        依最後一球的方向分成左方 / 右方失誤（L>R 之後沒回球 → 右方失誤）。"""
+        from count_hits import detect_mistakes_by_side
         fps = self.video_pane.fps or 30.0
         if self.video_pane.live:
             # 過網要約 0.1 秒後才會確認，留一點緩衝避免誤判
             end_frame = frame_idx - int(0.2 * fps)
         else:
             end_frame = max(0, self.video_pane.total - 1)
-        mistakes = detect_mistakes(self._hit_frames, fps, end_frame, self.MISTAKE_GAP_SEC)
-        self.set_mistake_count(bisect.bisect_right(mistakes, frame_idx))
+        mistakes = detect_mistakes_by_side(self._crossings, fps, end_frame, self.MISTAKE_GAP_SEC)
+        seen = [s for m, s in mistakes if m <= frame_idx]  # 只算播到目前這一刻的失誤
+        self.set_mistake_count(seen.count('L'), seen.count('R'))
 
     def _reset_hit_label(self):
         """沒有載入影片時，側邊擊球次數歸零。"""
         self._hit_token += 1
-        self._hit_frames = []
+        self._hit_frames, self._crossings = [], []
         self._hits_ready = False
         self.frame_label.setText("Hit 到 0 次球")
         self.hit_total_label.setText("全片共 0 次")
@@ -2456,9 +2474,12 @@ class LabelingWindow(QtWidgets.QMainWindow):
         total_seconds = self._countdown_left_ms // 1000
         self.countdown_label.setText(f"{total_seconds // 60:02d}:{total_seconds % 60:02d}")
 
-    def set_mistake_count(self, count: Optional[int]):
-        """預留失誤次數顯示。判斷式尚未定義，傳入 None 時維持空白。"""
-        self.mistake_label.setText("—" if count is None else f"{count} 次")
+    def set_mistake_count(self, left: Optional[int], right: Optional[int] = None):
+        """更新左方 / 右方失誤次數。只傳一個值（0 或 None）時兩格一起設定；None 顯示「—」。"""
+        if right is None:
+            right = left
+        self.left_mistake_label.setText("—" if left is None else f"{left} 次")
+        self.right_mistake_label.setText("—" if right is None else f"{right} 次")
 
     def _get_annotation_path(self, img_path: str) -> str:
         """根據標註資料夾設置決定標註檔案路徑。"""

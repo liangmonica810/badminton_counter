@@ -103,6 +103,10 @@
   .card .sub { font-size: 15px; opacity: .9; }
   .card.flash { transform: scale(1.04); background: #1f86b8; }
   .card.flash-bad { transform: scale(1.04); background: #b23b3b; }
+  /* 左方失誤 / 右方失誤：兩格並排 */
+  .miss-row { flex: 1; display: flex; gap: 12px; }
+  .miss-row .card { padding: 12px 4px; }
+  .miss-row .card .value { font-size: 28px; }
 
   /* 手機直立：畫面在上，三張卡片並排在下 */
   @media (max-aspect-ratio: 1/1) {
@@ -112,6 +116,12 @@
     .card { min-height: 110px; padding: 8px 4px; }
     .card .value { font-size: 22px; }
     .card .title, .card .sub { font-size: 13px; }
+    /* 直向：擊球、倒數在上一列，左方 / 右方失誤在下一列 */
+    .cards { flex-wrap: wrap; }
+    .cards > .card { flex: 1 1 0; }
+    .miss-row { flex: 1 1 100%; gap: 10px; }
+    .miss-row .card { min-height: 90px; }
+    .miss-row .card .value { font-size: 22px; }
   }
 
   /* ── 對話框 ── */
@@ -169,6 +179,9 @@
     text-align: center; padding: 8px 6px; transition: transform .12s, background .3s;
   }
   .hud-card .t { font-size: 14px; opacity: .9; }
+  .hud-miss-row { display: flex; gap: 6px; }
+  .hud-miss-row .hud-card { flex: 1; padding: 8px 2px; }
+  .hud-miss-row .hud-card .t { font-size: 12px; }
   .hud-card .v { font-size: 30px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
   .hud-card.flash { transform: scale(1.06); background: rgba(31, 134, 184, .95); }
   .hud-card.flash-bad { transform: scale(1.06); background: rgba(178, 59, 59, .95); }
@@ -215,9 +228,15 @@
       <div class="title">倒數計時</div>
       <div class="value" id="timerValue">03:00</div>
     </div>
-    <div class="card" id="mistakeCard">
-      <div class="title">失誤次數</div>
-      <div class="value" id="mistakeValue">0 次</div>
+    <div class="miss-row">
+      <div class="card" id="leftMissCard">
+        <div class="title">左方失誤</div>
+        <div class="value" id="leftMissValue">0 次</div>
+      </div>
+      <div class="card" id="rightMissCard">
+        <div class="title">右方失誤</div>
+        <div class="value" id="rightMissValue">0 次</div>
+      </div>
     </div>
   </aside>
 </main>
@@ -231,7 +250,10 @@
   <div class="hud-cards">
     <div class="hud-card" id="hudHitCard"><div class="t">擊球次數</div><div class="v" id="hudHits">0</div></div>
     <div class="hud-card"><div class="t">倒數計時</div><div class="v" id="hudTimer">03:00</div></div>
-    <div class="hud-card" id="hudMissCard"><div class="t">失誤次數</div><div class="v" id="hudMiss">0</div></div>
+    <div class="hud-miss-row">
+      <div class="hud-card" id="hudLeftMissCard"><div class="t">左方失誤</div><div class="v" id="hudLeftMiss">0</div></div>
+      <div class="hud-card" id="hudRightMissCard"><div class="t">右方失誤</div><div class="v" id="hudRightMiss">0</div></div>
+    </div>
   </div>
   <button id="hudStop">■ 停止</button>
 </div>
@@ -372,6 +394,27 @@ function detectMistakes(hitTimes, gap, endTime) {
   return out;
 }
 
+/** 失誤分左右（與 main.py / count_hits.py 的 detect_mistakes_by_side 相同規則）：
+ *  最後一球 L>R（左打到右）沒有被打回 → 右方失誤；R>L → 左方失誤；
+ *  方向判斷不出來（?）時用「前一球的反方向」推算。左右指攝影機畫面的左右。
+ *  回傳 [{t, side: "L" | "R" | "?"}] */
+function detectMistakesBySide(crossings, gap, endTime) {
+  let prevDir = null;
+  const dirs = crossings.map(c => {
+    let d = c.dir;
+    if (d !== "L>R" && d !== "R>L" && prevDir) d = prevDir === "L>R" ? "R>L" : "L>R";
+    if (d === "L>R" || d === "R>L") prevDir = d;
+    return d;
+  });
+  const out = [];
+  for (let i = 0; i < crossings.length; i++) {
+    const h = crossings[i].t, next = crossings[i + 1];
+    const miss = next !== undefined ? next.t - h > gap : endTime - h >= gap;
+    if (miss) out.push({ t: h + gap, side: dirs[i] === "L>R" ? "R" : dirs[i] === "R>L" ? "L" : "?" });
+  }
+  return out;
+}
+
 /* ═══════════════════════════════════════════════
    3. 畫面與狀態
    ═══════════════════════════════════════════════ */
@@ -385,7 +428,7 @@ let mode = "idle";        // idle | preview | recording | file
 let facing = "environment";
 let stream = null, recorder = null, chunks = [], recordUrl = null;
 let counter = null, startTime = 0, elapsed = 0, frameHandle = null;
-let wakeLock = null, lastHitCount = 0, lastMistakeCount = 0;
+let wakeLock = null, lastHitCount = 0, lastLeftMiss = 0, lastRightMiss = 0;
 
 function fmt(sec) {
   sec = Math.max(0, Math.ceil(sec - 1e-6));
@@ -403,24 +446,30 @@ function updateCards(final = false) {
   const hits = counter ? counter.crossings.map(c => c.t) : [];
   // 過網約 0.1 秒後才確認，進行中留 0.2 秒緩衝避免誤判失誤；結束時算到最後
   const endT = final ? elapsed : elapsed - 0.2;
-  const mistakes = detectMistakes(hits, settings.mistakeGap, endT).filter(t => t <= elapsed);
+  const mistakes = detectMistakesBySide(counter ? counter.crossings : [], settings.mistakeGap, endT)
+    .filter(m => m.t <= elapsed);
+  const left = mistakes.filter(m => m.side === "L").length;
+  const right = mistakes.filter(m => m.side === "R").length;
   $("hitValue").textContent = `Hit 到 ${hits.length} 次球`;
   $("hitSub").textContent = mode === "recording" ? "錄影中，邊錄邊計算"
                           : mode === "file" ? "分析中..." : `全片共 ${hits.length} 次`;
-  $("mistakeValue").textContent = `${mistakes.length} 次`;
+  $("leftMissValue").textContent = `${left} 次`;
+  $("rightMissValue").textContent = `${right} 次`;
   // 錄影中疊在畫面上的數字
   $("hudHits").textContent = hits.length;
   $("hudTimer").textContent = fmt(limit - elapsed);
-  $("hudMiss").textContent = mistakes.length;
+  $("hudLeftMiss").textContent = left;
+  $("hudRightMiss").textContent = right;
   $("hudTime").textContent = fmt(elapsed);
   if (hits.length > lastHitCount) { flash($("hitCard"), "flash"); flash($("hudHitCard"), "flash"); }
-  if (mistakes.length > lastMistakeCount) { flash($("mistakeCard"), "flash-bad"); flash($("hudMissCard"), "flash-bad"); }
-  lastHitCount = hits.length; lastMistakeCount = mistakes.length;
-  return { hits: hits.length, mistakes: mistakes.length };
+  if (left > lastLeftMiss) { flash($("leftMissCard"), "flash-bad"); flash($("hudLeftMissCard"), "flash-bad"); }
+  if (right > lastRightMiss) { flash($("rightMissCard"), "flash-bad"); flash($("hudRightMissCard"), "flash-bad"); }
+  lastHitCount = hits.length; lastLeftMiss = left; lastRightMiss = right;
+  return { hits: hits.length, mistakes: mistakes.length, left, right };
 }
 
 function resetCounts() {
-  counter = null; elapsed = 0; lastHitCount = 0; lastMistakeCount = 0;
+  counter = null; elapsed = 0; lastHitCount = 0; lastLeftMiss = 0; lastRightMiss = 0;
   updateCards();
 }
 
@@ -709,7 +758,7 @@ function startRecording() {
   setStatus("錄影中…按「停止」結束，時間到會自動停止");
   updateButtons();
 }
-function resetCountsKeepCounter() { elapsed = 0; lastHitCount = 0; lastMistakeCount = 0; updateCards(); }
+function resetCountsKeepCounter() { elapsed = 0; lastHitCount = 0; lastLeftMiss = 0; lastRightMiss = 0; updateCards(); }
 
 function stopSession() {
   if (mode !== "recording" && mode !== "file") return;
@@ -762,7 +811,7 @@ function updateCardsFinal() {
 }
 function showResult(r, wasFile) {
   $("resHits").textContent = `擊球（過網）：${r.hits} 次`;
-  $("resMistakes").textContent = `失誤：${r.mistakes} 次`;
+  $("resMistakes").textContent = `失誤：${r.mistakes} 次（左方 ${r.left} 次、右方 ${r.right} 次）`;
   $("resTime").textContent = `${wasFile ? "影片長度" : "錄影時間"}：${fmt(elapsed)}`;
   $("downloadLink").hidden = wasFile || !recordUrl;
   if (wasFile || !recordUrl) $("resSaved").textContent = "";

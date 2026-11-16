@@ -13,6 +13,7 @@
 """
 import os
 import sys
+import bisect
 import time
 import argparse
 import subprocess
@@ -265,6 +266,42 @@ def detect_mistakes(hit_frames, fps, end_frame, gap_sec=3.0):
         elif end_frame - h >= gap:
             mistakes.append(int(h + gap))
     return mistakes
+
+
+def detect_mistakes_by_side(crossings, fps, end_frame, gap_sec=3.0):
+    """ 失誤判斷（分左右）：規則與 detect_mistakes 相同，另外依「最後一次過網的方向」判斷是哪一方失誤。
+
+        最後一球 L>R（左方打到右方）之後沒有下一次過網 → 右方沒把球打回來 → 右方失誤；
+        最後一球 R>L → 左方失誤。方向無法判斷（'?'）時，用前一球方向的反方向推算。
+        （左、右指的是攝影機畫面的左邊與右邊）
+
+        Args:
+            crossings (List[Tuple[int, str]]): (過網的幀, 方向 'L>R' / 'R>L' / '?')，由小到大
+            fps, end_frame, gap_sec: 同 detect_mistakes
+
+        Returns:
+            mistakes (List[Tuple[int, str]]): (失誤被確認的幀, 'L' 或 'R' 或 '?')
+    """
+    crossings = sorted(crossings)
+    frames = [f for f, _ in crossings]
+    by_frame = {}
+    prev_dir = None
+    for f, d in crossings:
+        if d not in ('L>R', 'R>L') and prev_dir is not None:
+            d = 'R>L' if prev_dir == 'L>R' else 'L>R'
+        by_frame[f] = d
+        if d in ('L>R', 'R>L'):
+            prev_dir = d
+    gap = gap_sec * (fps if fps and fps > 1 else 30.0)
+    result = []
+    for m in detect_mistakes(frames, fps, end_frame, gap_sec):
+        last_hit = int(round(m - gap))
+        # 找出觸發這次失誤的那一球（m = 該球的幀 + gap，取整前後可能差 1）
+        idx = bisect.bisect_right(frames, last_hit + 1) - 1
+        d = by_frame.get(frames[idx]) if idx >= 0 else None
+        side = 'R' if d == 'L>R' else 'L' if d == 'R>L' else '?'
+        result.append((m, side))
+    return result
 
 
 class TripwireCounter:
